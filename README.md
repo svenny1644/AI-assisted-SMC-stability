@@ -177,6 +177,7 @@ Terminates an episode immediately — with no further reward — on any of:
 ---
 
 ## Stability Analysis
+**Disclaimer:** This study has not taken into account sensor lag or computational speed bottlenecks of Industrial Controllers.
 
 Because the RL agent changes SMC parameters online, the standard static-gain Lyapunov argument (`V̇ = s·ṡ ≤ −η|s| < 0`) does not directly apply — switching between stable configurations can itself destabilize a system (Liberzon, *Switching in Systems and Control*, 2003).
 
