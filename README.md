@@ -1,225 +1,242 @@
-# AI-Assisted Sliding Mode Control (Simulation, Dwell-Time Stability & Multi-Agent Benchmark)
+# RL Meta-SMC: A Supervisory Reinforcement Learning Agent for Sliding Mode Control
 
-A supervisory Deep Reinforcement Learning (DRL) framework paired with Sliding Mode Control (SMC) for online parameter adaptation on a 4th-order non-collocated Coupled Mass-Spring-Damper (CMSD) system[cite: 3, 5, 28]. 
+> Benchmarking seven classical and modern control architectures — PID, Adaptive PID, LQR, PID+LQR, SMC, Adaptive SMC, and MPC — against a TD3-based reinforcement learning agent that supervises and re-tunes a Sliding Mode Controller in real time.
 
-The architecture deploys an offline-trained continuous-action **Twin Delayed Deep Deterministic Policy Gradient (TD3)** supervisory agent updating the SMC surface slopes, reaching gain, and boundary layer parameters online at 50 Hz[cite: 30, 32, 35]. The closed-loop switched system is analytically proven to be **Globally Asymptotically Stable via Liberzon's dwell-time theory** ($\tau_d = 0.0169\text{ s} \le 0.02\text{ s}$)[cite: 61], slashing peak mechanical actuator stress by **51%** ($\pm 1,196\text{ N}$ vs. $\pm 2,427\text{ N}$) for identical average energy consumption[cite: 53].
-
-<!-- Embed your Simulink / response comparison plot here -->
-![Control Comparison](media/smc_tracking_effort_comparison.png)
-
----
-
-## 📌 Key Engineering Highlights
-
-* **Supervisory DRL Adaptation:** Unlike reactive self-tuning laws, the supervisory TD3 actor network dynamically modulates $\mathbf{\theta}_k = [C_2, C_4, \eta, \phi]^T$ at 50 Hz ($\Delta t = 0.02\text{ s}$) based on a 13-dimensional system observation vector[cite: 30, 34, 35, 36]:
-  $$\mathbf{o} = [x_1, x_2, v_1, v_2, x_{2,\text{ref}}, e_{x_2}, t_{\text{step}}, s, C_{2,\text{prev}}, C_{4,\text{prev}}, \eta_{\text{prev}}, \phi_{\text{prev}}, \Delta x_{\text{ref}}]^T \in \mathbb{R}^{13}$$
-[cite: 36, 37]
-* **Analytical Stability Guarantee (Liberzon's Dwell-Time):** Solved the non-trivial stability problem of dynamic parameter switching[cite: 58, 59]. Derived the exponential decay rate under a hyperbolic tangent reaching law ($\lambda_{\min} = 448.0$)[cite: 59, 60] and bounded the maximum energy jump ($\mu_{\max} \approx 1965.4$) under action rate penalties[cite: 60, 61]:
-  $$\tau_d = \frac{\ln(\mu_{\max})}{\lambda_{\min}} = \frac{\ln(1965.4)}{448.0} \approx 0.0169\text{ s} \le 0.02\text{ s} = T_s$$
-[cite: 61]
-  Because the controller sample time ($0.02\text{ s}$) strictly exceeds the calculated dwell time ($0.0169\text{ s}$), the hybrid switched system is provably **Globally Asymptotically Stable**[cite: 61].
-* **Actuator Protection & Energy Distribution:** Slashed maximum control effort by **51%** ($\pm 1,196\text{ N}$ vs. $\pm 2,427\text{ N}$) relative to fixed-gain SMC while maintaining near-identical average energy draw ($96.05\text{ N}$ vs. $95.79\text{ N}$)[cite: 53].
-* **Statistical Rigor & Policy Drift Detection:** Evaluated across a **100-run parallel Monte Carlo suite** over 3 randomized RNG seeds (42, 16, 44; 300 total 60-second evaluations)[cite: 47, 49]. Identified late-stage policy degradation between mid-training (Agent 3971: avg score $1,102.9$) and end-of-training (Agent 5000: avg score $1,021.4$) caused by lingering exploration noise[cite: 46, 49].
-* **Comprehensive Benchmarking:** Evaluated alongside **7 classical and modern control topologies** (Dual PID, SMC on Inverted Pendulum[cite: 7, 10, 13]; PID w/ Feedforward, Adaptive PID, LQR, PID+LQR, Culture-Bees Adaptive SMC, and linear MPC on CMSD)[cite: 5, 6, 7, 13, 16, 20, 22, 25].
+**Author:** Nguyễn Minh Hoàng (Student ID: 2252234)
+**Course:** ME4204 – Introduction to Modern Control Systems, HCM City University of Technology
+**Supervisors:** Prof. Nguyễn Duy Anh (Lecturing), Prof. Trương Ngọc Cương (Practice)
+**Date:** May 2026
 
 ---
 
-## 🔬 Mathematical Modeling & System Formulation
+## Table of Contents
 
-### 1. Coupled Mass-Spring-Damper (CMSD) Dynamics
-The plant is a 4th-order non-collocated dual-mass system representing an active vehicular suspension or precision industrial dual-stage positioning system[cite: 4, 9]:
-* **Unsprung Mass (Actuated):** $m_1 = 250\text{ kg}$, $k_1 = 750\text{ N/m}$, $b_1 = 50\text{ Ns/m}$[cite: 4, 9]
-* **Sprung Mass (Tracked Output $x_2$):** $m_2 = 300\text{ kg}$, $k_2 = 250\text{ N/m}$, $b_2 = 100\text{ Ns/m}$[cite: 4, 9]
-* **Actuation Limits:** $u(t) \in [-3500, 3500]\text{ N}$ acting directly on $m_1$[cite: 4, 9]
-* **Sensor Noise:** Band-limited white noise with power $200\text{ N}$, sample time $0.01\text{ s}$[cite: 9]
-
-State equations:
-$$\begin{aligned} \ddot{x}_1 &= \frac{1}{m_1} \left[ u(t) - (b_1 + b_2)\dot{x}_1 - (k_1 + k_2)x_1 + b_2\dot{x}_2 + k_2 x_2 \right] \\ \ddot{x}_2 &= \frac{1}{m_2} \left[ -b_2(\dot{x}_2 - \dot{x}_1) - k_2(x_2 - x_1) + d(t) \right] \end{aligned}$$
-[cite: 4, 9]
-
-### 2. SMC Surface and Reaching Law
-The sliding surface vector $C = [0, C_2, 0, C_4]^T$ acts on the state tracking error vector $\mathbf{e} = \mathbf{x}_{\text{ref}} - \mathbf{x}$[cite: 18, 41, 42]:
-$$s(\mathbf{x}) = C_2 (\dot{x}_{1,\text{ref}} - \dot{x}_1) + C_4 (\dot{x}_{2,\text{ref}} - \dot{x}_2)$$
-[cite: 42, 61]
-Using an exponential reaching law smoothed by a hyperbolic tangent boundary layer to prevent mechanical chattering[cite: 18, 59]:
-$$\dot{s} = -\eta \tanh\left(\frac{s}{\phi}\right)$$
-[cite: 59]
-
-### 3. Supervisory Action Translation & Parameter Envelopes
-The TD3 actor network generates normalized actions $u_i \in [-1, 1]$ mapped to continuous physical parameters[cite: 35, 41, 42]:
-* **$C_2$ (Speed vs. Overshoot):** $C_2 = 20.0 + 5.0 \cdot u_1 \in [15.0, 25.0]$[cite: 42]
-* **$C_4$ (Internal Damping):** $C_4 = 2.0 + 1.0 \cdot u_2 \in [1.0, 3.0]$[cite: 42]
-* **$\eta$ (Reaching Velocity):** $\eta = 100.0 + 50.0 \cdot u_3 \in [50.0, 150.0]$[cite: 42]
-* **$\phi$ (Boundary Layer):** $\phi = 0.100 + 0.070 \cdot u_4 \in [0.030, 0.170]$ (guaranteed above the $0.027$ chattering boundary)[cite: 42]
+- [Overview](#overview)
+- [Systems Modeled](#systems-modeled)
+- [Controllers Implemented](#controllers-implemented)
+- [Results Summary](#results-summary)
+- [The RL Meta-SMC Architecture](#the-rl-meta-smc-architecture)
+- [Training & Validation Pipeline](#training--validation-pipeline)
+- [Stability Analysis](#stability-analysis)
+- [Pros & Cons of the RL Approach](#pros--cons-of-the-rl-approach)
+- [Repository Structure](#repository-structure)
+- [Tech Stack](#tech-stack)
 
 ---
 
-## 🛡️ Training Environment, Multi-Tier Reward & Safety Kill-Switch
+## Overview
 
-Training was executed offline in MATLAB/Simulink across **5,000 episodes (60s / 3,000 steps each)** utilizing an NVIDIA RTX 3080 Ti GPU (12-hour compute budget)[cite: 35, 37, 39, 43].
+This project compares classical/modern control theory against a reinforcement-learning-augmented controller on two benchmark plants. Rather than treating RL as a replacement for Sliding Mode Control (SMC), the core contribution — **RL Meta-SMC** — positions a trained TD3 agent as a *supervisory layer* above a standard SMC: the agent doesn't compute the control force directly, it continuously re-tunes the SMC's own parameters (sliding surface coefficients, switching gain, boundary layer thickness) based on real-time system state. The SMC retains its mathematical stability guarantees; the neural network contributes situational awareness that fixed-gain and even classical adaptive laws cannot.
 
-```text
-       ┌────────────────────────────────────────────────────────┐
-       │             Supervisory TD3 Agent (50 Hz)              │
-       │    Observation: 13x1 Vector | Action: [C2, C4, η, φ]   │
-       └──────────────────────────┬─────────────────────────────┘
-                                  │ Actions u ∈ [-1, 1]
-                                  ▼
-       ┌────────────────────────────────────────────────────────┐
-       │      scale_actions: Linear Envelope Scaling Block      │
-       └──────────────────────────┬─────────────────────────────┘
-                                  │ Dynamic [C2, C4, η, φ]
-                                  ▼
-┌─────────────┐   u(t)    ┌──────────────┐  x1, x2   ┌───────────────────┐
-│ Reference / ├──────────►│ Manual SMC   ├──────────►│  4th-Order CMSD   │
-│ Step Limits │           │ Reaching Law │           │ Physical Dynamics │
-└─────────────┘           └──────────────┘           └─────────┬─────────┘
-       ▲                                                       │
-       └──────────────── Feedback Loop (100 Hz) ───────────────┘
-```[cite: 9, 34, 35, 41, 42]
-
-### Multi-Tier Reward Function (`calc_reward.m`)
-Evaluated at 50 Hz to balance precision with structural preservation[cite: 30, 31, 32]:
-1. **Base Survival:** $+0.2$ per timestep[cite: 31, 32]
-2. **Quadratic Tracking Penalty:** $-4.0 \cdot e_{x_2}^2$[cite: 31, 32]
-3. **Parachute Penalty:** $-1.0 \cdot \vert{}v_2\vert{}$ active only within $\vert{}e_{x_2}\vert{} < 50\text{ mm}$ when $\vert{}v_2\vert{} > 0.10\text{ m/s}$ (curbs aggressive terminal velocity)[cite: 31, 32]
-4. **Target Lock Bonus:** $+0.6$ for $\vert{}e\vert{} < 10\text{ mm}$, $+0.3$ for $\vert{}e\vert{} < 30\text{ mm}$[cite: 31, 32]
-5. **Continuous Gaussian Progress:** $+0.2 \cdot \exp(-5.0 \cdot e_{x_2}^2)$[cite: 31, 32]
-6. **Actuator Stroke Protection:** Quadratic soft penalty for $\vert{}x_1\vert{} > 0.30\text{ m}$, Gaussian centering bonus $0.06 \cdot \exp(-10.0 \cdot x_1^2)$[cite: 31, 32]
-7. **Terminal Fail Penalty:** $-2000.0$ if $\vert{}x_1\vert{} > 0.65\text{ m}$[cite: 31, 32]
-8. **Action Smoothness Penalty (Inference Benchmark):** $-0.05 \cdot \sum \vert{}\Delta u_i\vert{}$ when single-frame action shifts exceed $0.2$[cite: 44]
-
-### Hardware-Protection Safety Interlock (`check_safety.m`)
-Terminates bad episodes immediately to prevent solver divergence and policy collapse[cite: 33, 34]:
-* **Hardware Limit:** $\vert{}x_1\vert{} > 0.65\text{ m}$ (unconditional trip)[cite: 33, 34]
-* **Total Loss of Control:** $\vert{}e_{x_2}\vert{} > 0.50\text{ m}$ sustained for $> 3.0\text{ s}$[cite: 33, 34]
-* **Settle-Time Violation:** $\vert{}e_{x_2}\vert{} > 30\text{ mm}$ after $2.5\text{ s}$ following a reference step[cite: 33, 34]
+The project is split into two stages:
+1. **Classical & modern benchmarking** — seven controllers evaluated on an Inverted Pendulum (IP) and a Coupled Mass-Spring-Damper (CMSD) system.
+2. **RL Meta-SMC** — a TD3 agent trained for 5,000 episodes to supervise the CMSD's SMC, benchmarked against a fixed-parameter SMC via Monte Carlo evaluation and backed by a formal stability proof.
 
 ---
 
-## 📊 Comprehensive Controller Benchmark
+## Systems Modeled
 
-### 1. Meta-RL SMC vs. Baseline Fixed-Gain SMC (CMSD Benchmark)
-Evaluated on reference steps $\in [-0.2, 0.5]\text{ m}$ under white noise ($P_n = 200\text{ N}$)[cite: 9, 41, 50]:
+### 1. Inverted Pendulum (Cart-Pole)
+A 4-state, non-collocated, inherently unstable mechatronic system (right-half-plane pole). Control effort is applied to the cart; the goal is to stabilize the pendulum angle while tracking a cart position reference.
 
-| Metric | Fixed-Gain SMC[cite: 53] | Meta-RL Tuned SMC[cite: 53] | Delta / Trade-off |
-| :--- | :--- | :--- | :--- |
-| **Max Peak Force ($u_{\max}$)**[cite: 53] | $+2,427\text{ N}$[cite: 50, 53] | **$+1,196\text{ N}$**[cite: 53] | **-50.7% (Reduced Actuator Stress)**[cite: 53] |
-| **Min Peak Force ($u_{\min}$)**[cite: 53] | $-2,421\text{ N}$[cite: 50, 53] | **$-1,162\text{ N}$**[cite: 53] | **-52.0% (Reduced Actuator Stress)**[cite: 53] |
-| **Average Energy Draw ($\vert{}u\vert{}$)**[cite: 53] | $95.79\text{ N}$[cite: 50, 53] | $96.05\text{ N}$[cite: 53] | $+0.27\%$ (Identical baseline consumption)[cite: 53] |
-| **Mean Absolute Error ($x_2$)**[cite: 53] | $0.0127\text{ m}$[cite: 50, 53] | $0.0169\text{ m}$[cite: 53] | $+33\%$ trade-off due to parachute penalty[cite: 53] |
-| **Actuation Profile**[cite: 53] | Severe violent spikes[cite: 52] | Smooth force gradients[cite: 52, 53] | Eliminates actuator fatigue and chatter[cite: 53] |
+| Parameter | Value |
+|---|---|
+| Cart mass (M) | 2.4 kg |
+| Pendulum mass (m) | 0.23 kg |
+| Distance to pendulum CoM (l) | 0.36 m |
+| Gravity (g) | 9.8 m/s² |
+| Cart travel limit | ±1 m |
+| Sensor noise | Band-limited white noise, power 0.001 m |
 
-### 2. Full 7-Controller Comparative Performance (CMSD System)
-Data extracted from empirical test series across the CMSD benchmark[cite: 25]:
+### 2. Coupled Mass-Spring-Damper (CMSD)
+A 4-state, non-collocated system representing an active suspension / dual-mass positioning stage. Control effort acts on `m1`; the tracked variable `x2` is separated from the actuator by a flexible spring, making this a harder tracking problem than the IP.
 
-| Controller Architecture | Tracking MAE ($x_2$)[cite: 25] | Tracking RMSE ($x_2$)[cite: 25] | Effort MAE ($u$)[cite: 25] | Effort RMSE ($u$)[cite: 25] | Performance Summary |
-| :--- | :--- | :--- | :--- | :--- | :--- |
-| **Model Predictive Control (MPC)**[cite: 25] | **$0.00358\text{ m}$**[cite: 25] | **$0.02589\text{ m}$**[cite: 25] | $160.23\text{ N}$[cite: 25] | $228.01\text{ N}$[cite: 25] | Lowest tracking error via receding horizon lookahead[cite: 7, 24] |
-| **PID + Feedforward**[cite: 25] | $0.00643\text{ m}$[cite: 25] | $0.02888\text{ m}$[cite: 25] | $165.04\text{ N}$[cite: 25] | $307.16\text{ N}$[cite: 25] | High precision, but severe mechanical actuator spikes[cite: 17] |
-| **Fixed-Gain SMC**[cite: 25] | $0.00780\text{ m}$[cite: 25] | $0.03363\text{ m}$[cite: 25] | $151.59\text{ N}$[cite: 25] | $200.79\text{ N}$[cite: 25] | Robust disturbance rejection, moderate effort[cite: 19] |
-| **Adaptive PID**[cite: 25] | $0.00899\text{ m}$[cite: 25] | $0.03054\text{ m}$[cite: 25] | $163.78\text{ N}$[cite: 25] | $306.87\text{ N}$[cite: 25] | High overhead, prone to transient overshoot[cite: 5, 25] |
-| **PID + LQR Hybrid**[cite: 25] | $0.01000\text{ m}$[cite: 25] | $0.03723\text{ m}$[cite: 25] | $165.48\text{ N}$[cite: 25] | $308.02\text{ N}$[cite: 25] | Complex to tune; inner/outer loops compete[cite: 6, 25] |
-| **Adaptive SMC (Culture-Bees)**[cite: 25] | $0.01327\text{ m}$[cite: 25] | $0.04251\text{ m}$[cite: 25] | $147.89\text{ N}$[cite: 25] | $196.48\text{ N}$[cite: 25] | Good chatter attenuation; computationally heavy (10ms opt)[cite: 6, 22] |
-| **Linear Quadratic Regulator (LQR)**[cite: 25] | $0.02337\text{ m}$[cite: 25] | $0.05679\text{ m}$[cite: 25] | **$144.57\text{ N}$**[cite: 25] | **$175.40\text{ N}$**[cite: 25] | Pure regulator; lacks integral tracking authority[cite: 5, 25] |
-
-### 3. Inverted Pendulum Benchmark Results
-Initial benchmark validating modern SMC against classical Dual-PID under non-collocated cart-pole dynamics[cite: 8, 12, 15]:
-* **Cart Position Tracking ($x$):** SMC achieved $\text{MAE} = 0.0342\text{ m}$ vs Dual-PID $\text{MAE} = 0.0582\text{ m}$ (**41.2% improvement**)[cite: 12, 15].
-* **Angle Stabilization ($\theta$):** SMC achieved $\text{MAE} = 0.0015\text{ rad}$ vs Dual-PID $\text{MAE} = 0.0028\text{ rad}$ (**46.7% improvement**)[cite: 12, 15].
-* **Control Effort ($u$):** Achieved superior balance with only a negligible $2.1\%$ increase in average effort[cite: 15].
+| Parameter | Value |
+|---|---|
+| Unsprung mass (k1, b1) | 750 N/m, 50 Ns/m |
+| Sprung mass (m2, k2, b2) | 300 kg, 250 N/m, 100 Ns/m |
+| Control input cap | ±3500 N |
+| Sensor noise | Band-limited white noise, power 200 N |
 
 ---
 
-## 🎲 Monte Carlo Statistical Evaluation & Policy Drift Analysis
+## Controllers Implemented
 
-To verify generalizability across arbitrary disturbance profiles, agents were evaluated in a **100-run parallel Monte Carlo gauntlet** over three randomized RNG seeds[cite: 44, 47, 49]:
-
-```matlab
-% Monte Carlo Parallel Execution Extract
-parfor i = 1:numRuns
-    assignin('base', 'ref_seed', shared_ref_seeds(i));
-    assignin('base', 'noise_seed', shared_noise_seeds(i));
-    exp3971 = sim(env, agent3971, simOpts);
-    scores_3971(i) = sum(exp3971.Reward);
-    exp5000 = sim(env, agent5000, simOpts);
-    scores_5000(i) = sum(exp5000.Reward);
-end
-```[cite: 47, 48]
-
-| Test Batch | Random Seed | Agent 3971 (Mid-Training)[cite: 49] | Agent 5000 (End-Training)[cite: 49] | Statistical Winner[cite: 49] |
-| :---: | :---: | :---: | :---: | :---: |
-| Run 1[cite: 49] | Seed 42[cite: 49] | **1094.57**[cite: 49] | 1007.53[cite: 49] | Agent 3971 (+87.04 pts)[cite: 49] |
-| Run 2[cite: 49] | Seed 16[cite: 49] | **1062.92**[cite: 49] | 990.99[cite: 49] | Agent 3971 (+71.93 pts)[cite: 49] |
-| Run 3[cite: 49] | Seed 44[cite: 49] | **1151.37**[cite: 49] | 1065.71[cite: 49] | Agent 3971 (+85.66 pts)[cite: 49] |
-
-### The "Policy Degradation" Phenomenon
-Around episode 3,971, the actor network had successfully converged upon an optimal trade-off frontier[cite: 46, 49]. Because training continued for an additional 1,000 episodes with an exploration variance floor ($\sigma_{\min} = 0.05$)[cite: 37, 49], gradient updates overwrote subtle optimal weights with slightly more conservative ones[cite: 49]. **Key Takeaway:** In deep reinforcement learning for physical control, more training steps do not guarantee monotonic improvements; rigorous checkpoint scoring is required[cite: 49].
+| Controller | Summary | Strength | Weakness |
+|---|---|---|---|
+| **PID (+ Feedforward)** | Model-free, reactive P/I/D correction with a feedforward baseline term | Simple, precise for static loads | Blind to system physics, reactive only |
+| **Adaptive PID** | Gains shift with operating conditions | Handles varying payloads | High computational overhead, can overreact |
+| **LQR** | Optimal state-feedback regulator (Q/R cost tradeoff) | Mathematically guaranteed stability | No integral action → poor non-zero tracking |
+| **PID + LQR Hybrid** | LQR inner loop + PID outer loop (cascaded) | Combines regulation and tracking | Complex to tune, loops can fight each other |
+| **SMC** | Robust switching control along a defined sliding surface | Extreme robustness to matched disturbances | Chattering unless boundary-layer smoothed |
+| **Adaptive SMC (Culture-Bee)** | Switching gain / boundary layer re-optimized every 0.01 s via a Culture-Bees metaheuristic | Smooths chattering near target | Heavy real-time compute cost |
+| **MPC** | Receding-horizon optimization under explicit constraints | Best tracking accuracy, handles constraints natively | Computationally expensive, model-dependent |
+| **RL Meta-SMC (this project)** | TD3 agent supervises SMC's parameters in real time | Learns the Pareto trade-off surface empirically | Expensive to train, hard to certify |
 
 ---
 
-## 📁 Repository Structure
+## Results Summary
 
-```text
-├── docs/
-│   ├── BTL_ME4204_Report.pdf            # Full 62-page curriculum report
-│   └── dwell_time_stability_proof.pdf   # Complete Liberzon hybrid stability derivation
+### Inverted Pendulum
+
+| Controller | Position MAE (m) | Position RMSE (m) | Angle MAE (rad) | Angle RMSE (rad) |
+|---|---|---|---|---|
+| Dual PID | 0.0582 | 0.1068 | 0.0028 | 0.0035 |
+| SMC | 0.0342 | 0.0902 | 0.0015 | 0.0032 |
+
+SMC improved position tracking by **41.2%** and angle precision by **46.7%** over Dual PID, with only a 2.1% increase in average control effort.
+
+### Coupled Mass-Spring-Damper (all 7 controllers)
+
+| Controller | Tracking MAE (m) | Tracking RMSE (m) | Effort MAE (N) | Effort RMSE (N) |
+|---|---|---|---|---|
+| PID + Feedforward | 0.00643 | 0.02888 | 165.04 | 307.16 |
+| Adaptive PID | 0.00899 | 0.03054 | 163.78 | 306.87 |
+| LQR | 0.02337 | 0.05679 | 144.57 | 175.40 |
+| PID + LQR Hybrid | 0.01000 | 0.03723 | 165.48 | 308.02 |
+| SMC | 0.00780 | 0.03363 | 151.59 | 200.79 |
+| Adaptive SMC | 0.01327 | 0.04251 | 147.89 | 196.48 |
+| **MPC** | **0.00358** | **0.02589** | 160.23 | 228.01 |
+
+MPC delivered the best tracking accuracy overall (23% better RMSE than SMC) at a moderate 16% effort premium — a favorable tradeoff when positional precision is the priority.
+
+### RL Meta-SMC vs. Fixed-Parameter SMC (final benchmark)
+
+| Metric | Fixed SMC | RL-Tuned SMC | Δ |
+|---|---|---|---|
+| Average energy usage | 95.79 N | 96.05 N | ≈ equal |
+| Peak energy usage | ±2,427 N | ±1,196 N | **−51% peak actuator stress** |
+| Average tracking error | 0.0127 m | 0.0169 m | **+33% tracking error** |
+
+**Key finding:** the RL agent did not uniformly outperform the fixed SMC — it found a different, deliberate point on the Pareto frontier between actuator wear and tracking precision, trading steady-state precision for roughly half the peak mechanical stress, exactly as its reward function incentivized.
+
+---
+
+## The RL Meta-SMC Architecture
+
+**Algorithm:** TD3 (Twin Delayed Deep Deterministic Policy Gradient) — chosen over DDPG/DQN to counter Q-value overestimation bias via twin critics, delayed actor updates, and target policy smoothing.
+
+**Observation space (13-D):**
+`[x1, x2, v1, v2, x2_ref, x2_error, time_since_change, s, C2_prev, C4_prev, eta_prev, phi_prev, ref_jump]`
+
+**Action space (4-D, normalized to [-1, 1]):**
+`[C2_tune, C4_tune, Eta_tune, Phi_tune]` → scaled downstream to the SMC's physical parameter ranges:
+
+| Parameter | Role | Range |
+|---|---|---|
+| C₂ | Sliding surface — speed vs. overshoot | 15.0 – 25.0 |
+| C₄ | Sliding surface — damping | 1.0 – 3.0 |
+| η (Eta) | Reaching law gain (steady-state error) | 50.0 – 150.0 |
+| φ (Phi) | Boundary layer thickness (chattering control) | 0.030 – 0.170 |
+
+**Network:** 3 fully-connected hidden layers × 256 neurons, `tanh` activations, terminal `tanh` output layer.
+
+**Hyperparameters:** γ = 0.99, replay buffer = 10⁶ transitions, batch size = 256, critic LR = 3×10⁻⁴, actor LR = 1×10⁻⁴, exploration variance 1.0 → 0.05 (decay 5×10⁻⁶/episode).
+
+**Training:** 5,000 episodes × up to 3,000 steps (60 s simulated @ 50 Hz agent clock) — approx. 12 hours on an RTX 3080 Ti (12 GB VRAM) + 64 GB DDR5.
+
+### Reward Function
+Evaluated at 50 Hz across 7 weighted criteria, dominated by a quadratic tracking penalty on `x2` and shaped by secondary objectives (energy efficiency, `x1` constraint compliance):
+
+- Base survival reward: `±0.2`
+- Tracking penalty: `−4.0 × e²`
+- "Parachute" penalty for high velocity near-target (discourages overshoot)
+- Target-lock bonus inside 10 mm / 30 mm error bands
+- Continuous Gaussian progress bonus
+- `x1` soft barrier + centering bonus
+- Terminal penalty of `−2000` on hardware-limit violation
+- Hard reward floor of `−10.0` per step
+
+### Kill Switch (Safety Interlock)
+Terminates an episode immediately — with no further reward — on any of:
+
+| # | Condition | Trigger |
+|---|---|---|
+| 1 | Hardware limit | `|x1| > 0.65 m` |
+| 2 | Total loss of control | `|x2_error| > 0.50 m` for > 3.0 s |
+| 3 | Settle-time violation | `|x2_error| > 30 mm` for > 2.5 s after last reference change |
+
+---
+
+## Training & Validation Pipeline
+
+1. **Training** — 5,000-episode TD3 run; convergence plateaus around episode ~1,200, after which average reward shows peaks/troughs from exploration noise rather than meaningful gains.
+2. **Agent screening** — all saved checkpoints re-simulated against a fixed seed pair to rank by chattering-penalized score. **Agent 3971** (score 629) outperformed the final **Agent 5000** (score 614).
+3. **Monte Carlo evaluation** — Agent 3971 vs. Agent 5000 run across 100 randomized episodes, repeated for 3 independent RNG seeds (42, 16, 44):
+
+   | Seed | Agent 3971 avg. | Agent 5000 avg. |
+   |---|---|---|
+   | 42 | 1094.57 | 1007.53 |
+   | 16 | 1062.92 | 990.99 |
+   | 44 | 1151.37 | 1065.71 |
+
+   Agent 3971 consistently outperformed Agent 5000 by ~70–85 points across 300 total episodes — evidence of **policy degradation**: continued training past convergence, under active exploration noise, slightly eroded an already-optimal policy.
+4. **Final benchmark** — Agent 3971 vs. a fixed-parameter SMC baseline under identical noise/reference seeds (see [Results Summary](#rl-meta-smc-vs-fixed-parameter-smc-final-benchmark)).
+
+---
+
+## Stability Analysis
+
+Because the RL agent changes SMC parameters online, the standard static-gain Lyapunov argument (`V̇ = s·ṡ ≤ −η|s| < 0`) does not directly apply — switching between stable configurations can itself destabilize a system (Liberzon, *Switching in Systems and Control*, 2003).
+
+This project addresses that with a **dwell-time stability proof**:
+
+- Derives a guaranteed exponential decay rate `λ_min ≈ 448.0` from the worst-case tanh reaching-law bound, using the agent's parameter floor (`η_min = 50`, `φ_max = 0.170`).
+- Derives the worst-case single-step Lyapunov energy jump `μ_max ≈ 1965.4` from the maximum legal parameter shift (bounded by the reward function's chatter penalty) combined with worst-case physical states.
+- Computes the required Liberzon dwell time: `τ_d = ln(μ_max) / λ_min ≈ 0.0169 s`.
+- Confirms the agent's fixed 50 Hz (0.02 s) control clock **exceeds** this minimum dwell time, proving the switched system is **Globally Asymptotically Stable** regardless of initial conditions.
+
+---
+
+## Pros & Cons of the RL Approach
+
+**Limitations:**
+- **Hardware cost** — GPU training, large replay buffers (~250 GB for this run alone); inference-only deployment still a tough fit for lean embedded targets (automotive ECUs, flight computers, PLCs).
+- **Retraining overhead** — any plant change (payload, spring constants, actuator limits) requires a full retrain + re-validation cycle, unlike a same-day SMC re-tune.
+- **No direct tunability** — fixing a specific performance shortfall means reshaping the reward function and retraining, not adjusting a single gain.
+- **Certification** — no decision-chain to audit for individual actions, making compliance with standards like DO-178C, IEC 62304, or ISO 26262 effectively impossible today.
+
+**Where it's worth it:**
+- Plants too complex or poorly modeled for classical/MPC assumptions to hold.
+- Applications where a single fixed algorithm can't sit optimally across competing objectives (tracking vs. energy vs. actuator wear) and the Pareto trade-off itself needs to be navigated in real time.
+- Systems where **actuator longevity** outweighs micro-precision — e.g., offshore machinery, deep-space mechanisms, implanted medical devices — where this project's RL agent achieved ~51% lower peak actuator stress at the cost of 33% more tracking error.
+
+---
+
+## Repository Structure
+
+> Suggested layout — adjust to match your actual file organization.
+
+```
+.
+├── README.md
+├── report/
+│   └── BTL_ME4204_Nguyen_Minh_Hoang_2252234.pdf      # Full written report
+├── simulink/
+│   ├── IP_system.slx                                 # Inverted Pendulum plant + controllers
+│   ├── CMSD_system.slx                                # CMSD plant + classical controllers
+│   └── RL_SMC_Training_Env.slx                        # RL training/validation environment
 ├── matlab/
-│   ├── agents/
-│   │   ├── Tested_Reward629_Agent3971.mat  # Optimal checkpoint (Monte Carlo winner)
-│   │   └── Tested_Reward614_Agent5000.mat  # Episode 5000 terminal agent
-│   ├── functions/
-│   │   ├── calc_reward.m               # 7-stage 50 Hz reward shaping function
-│   │   └── check_safety.m              # 3-condition hardware-protection kill switch
-│   ├── scripts/
-│   │   ├── NN_SMC_Agent_1.m            # TD3 training configuration & hyperparameter setup
-│   │   ├── run_agent_benchmark.m       # Chatter-penalized evaluation pipeline
-│   │   └── run_monte_carlo_gauntlet.m  # 100-run parallelized statistical validator
-│   └── models/
-│       ├── Inverted_Pendulum_Sim.slx   # Dual-PID vs. SMC Inverted Pendulum benchmark
-│       ├── CMSD_Classical_Modern.slx   # CMSD with PID, SMC, Adaptive SMC, LQR, MPC
-│       └── RL_SMC_Training_Env.slx     # Closed-loop TD3 supervisory training harness
-└── media/
-    ├── smc_tracking_effort_comparison.png
-    ├── training_convergence_5000ep.png
-    └── ai_parameter_adaptation_profiles.png
-```[cite: 2, 3, 32, 34, 35, 41, 42, 45, 47]
+│   ├── NN_SMC_Agent_1.m                               # TD3 agent construction & training script
+│   ├── calc_reward.m                                  # 50 Hz reward function
+│   ├── check_safety.m                                 # Kill-switch / safety interlock logic
+│   ├── benchmark_agents.m                             # Post-training agent screening script
+│   └── monte_carlo_eval.m                             # 100-run Monte Carlo evaluation
+└── agents/
+    └── Tested_Reward629_Agent3971.mat                 # Best-performing trained agent checkpoint
+```
 
 ---
 
-## 🚀 How to Run the Simulations
+## Tech Stack
 
-### Prerequisites
-* MATLAB R2024a or newer[cite: 1]
-* Simulink[cite: 1]
-* Reinforcement Learning Toolbox
-* Control System Toolbox
-* Parallel Computing Toolbox (for multi-core Monte Carlo sweeps)[cite: 47]
-
-### 1. Evaluate Pre-Trained Agent 3971 vs. Fixed SMC
-```matlab
-% Set benchmark seeds matching report specification
-noise_seed = 23341; ref_seed = 12345;
-open_system('matlab/models/RL_SMC_Training_Env.slx');
-sim('matlab/models/RL_SMC_Training_Env.slx');
-```[cite: 41, 42, 45, 50]
-
-### 2. Execute the 100-Run Monte Carlo Statistical Gauntlet
-```matlab
-run('matlab/scripts/run_monte_carlo_gauntlet.m');
-```[cite: 47]
+- **MATLAB & Simulink** — plant modeling, classical/modern controller implementation
+- **Reinforcement Learning Toolbox** — TD3 agent, environment registration, training loop
+- **Parallel Computing Toolbox** — parallelized Monte Carlo evaluation
+- **Control theory** — LQR, SMC, MPC, Lyapunov stability, Liberzon switched-systems dwell-time analysis
 
 ---
 
-## 📜 Academic Attribution
+## Acknowledgements
 
-```bibtex
-@techreport{nguyen2026rl_meta_smc,
-  author      = {Nguy{\~{e}}n Minh Ho{\`{a}}ng},
-  title       = {Curriculum Report: AI-Assisted Sliding Mode Control and Supervisory Reinforcement Learning Agent on Coupled Mechanical Systems},
-  institution = {Ho Chi Minh City University of Technology (HCMUT)},
-  number      = {ME4204-2252234},
-  year        = {2026},
-  month       = {May}
-}
-```[cite: 2]
+Submitted for ME4204 – Introduction to Modern Control Systems, HCM City University of Technology, under the supervision of Prof. Nguyễn Duy Anh and Prof. Trương Ngọc Cương.
