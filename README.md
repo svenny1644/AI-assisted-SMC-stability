@@ -76,6 +76,7 @@ A 4-state, non-collocated system representing an active suspension / dual-mass p
 ---
 
 ## Results Summary
+**Disclaimer:** This project was done as an Assignment for the course Introduction to Modern Control Systems; therefore the controllers in this project are nowhere near being professionally parameterized, and therefore these results are not indicative of well-tuned tracking algorithms.
 
 ### Inverted Pendulum
 
