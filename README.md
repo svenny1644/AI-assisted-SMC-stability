@@ -205,7 +205,7 @@ This project addresses that with a **dwell-time stability proof**:
 
 ## Repository Structure
 
-> Suggested layout — adjust to match your actual file organization.
+> Planned layout — incomplete 
 
 ```
 .
